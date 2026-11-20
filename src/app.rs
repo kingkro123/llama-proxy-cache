@@ -608,7 +608,11 @@ async fn chat(State(state): State<AppState>, req: axum::http::Request<Body>) -> 
         return json_error(503, "no backends configured");
     }
     // model_id is taken from the first backend (used for cache keys only)
-    let backend_model_id = state.clients[0].get_model_id().await;
+    let backend_model_id = if client_model != state.config.model_id {
+        client_model.clone()
+    } else {
+        state.clients[0].get_model_id().await
+    };
 
     let prefix = hashing::raw_prefix(&messages);
     let full_for_key = format!("{}\n{}", backend_model_id, prefix);
@@ -1610,12 +1614,14 @@ fn prune_cache(config: &Config) {
         for dir in config.slot_save_dirs() {
             // NotFound is normal: the KV file may only exist in some
             // backends' directories (or nowhere if none is configured).
-            if let Err(e) = std::fs::remove_file(dir.join(key)) {
-                tracing::debug!(
-                    "prune_kv_fail dir={} key={}: {e}",
-                    dir.display(),
-                    short16(key)
-                );
+            let _ = std::fs::remove_file(dir.join(key));
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let sub = entry.path();
+                    if sub.is_dir() {
+                        let _ = std::fs::remove_file(sub.join(key));
+                    }
+                }
             }
         }
     }
